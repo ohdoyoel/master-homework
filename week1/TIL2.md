@@ -547,3 +547,253 @@ _.uniqBy([1, 2, 2, 3, 3, 3], (item) => item); // [1, 2, 3]
 ```
 
 #### 실전 예시 : 소셜 서비스의 좋아요 캐싱
+
+좋아요 상태를 항상 서버와 싱크를 맞춘다는 것은 굉장히 헤비하다. 인스타그램, 유튜브영상 초당 좋아요 개수 변화는 빈번하기 때문에, batch 처리를 한다. 좋아요를 누를 때마다 처리하는 것이 아니고, 일정 시간, 또는 일정 개수마다 묶어서 처리하는 것이다.
+
+서버에게 단일 데이터 정보를 보내는 것은 굉장히 비싼 처리를 하고 있다는 것! 절대로 IO를 단일로 보내는 시나리오를 프로덕션 레벨에서는 하면 안된다.
+
+```js
+import { useState } from "react";
+
+const LikeButton = ({ postId }: { postId: string }) => {
+  const [likedPosts, setLikedPosts] = useState(() => {
+    // localStorage에서 초기값 로드
+    const saved = JSON.parse(localStorage.getItem("likedPosts") || "[]");
+    return new Set(saved);
+  });
+
+  const isLiked = likedPosts.has(postId);
+
+  const toggleLike = () => {
+    // 서버에 IO를 보내는 것은 미친짓! 상태를 바꾸자.
+    setLikedPosts((prev) => {
+      const newLikes = new Set(prev);
+      if (newLikes.has(postId)) {
+        newLikes.delete(postId);
+      } else {
+        newLikes.add(postId);
+      }
+
+      // localStorage에 저장
+      localStorage.setItem("likedPosts", JSON.stringify([...newLikes]));
+      return newLikes;
+    });
+  };
+
+  return (
+    <button onClick={toggleLike} style={{ color: isLiked ? "red" : "gray" }}>
+      {isLiked ? "❤️" : "🤍"}
+    </button>
+  );
+};
+
+export default LikeButton;
+```
+
+Set으로 캐싱된 좋아요 목록을 통해 빠른 존재 여부 확인(has), 직렬화 저장 용이
+
+#### 집합 연산 문제를 해결하는 Set
+
+집합 연산 문제는 대부분의 시나리오에서 발생한다. 우리 서비스는 집합 안쓰겠지~ 하지 말고, 외우자.
+
+```js
+// 합집합 A + B
+const union = new Set([...setA, ...setB]);
+// 교집합 A ∩ B
+const intersection = new Set([...setA].filter((x) => setB.has(x)));
+// 차집합 A - B
+const difference = new Set([...setA].filter((x) => !setB.has(x)));
+```
+
+```js
+// 교집합 A ∩ B 안좋은 구현
+const intersection = [];
+A.forEach((x) => {
+  B.forEach((y) => {
+    if (x === y) {
+      intersection.push(x);
+    }
+  });
+});
+```
+
+#### Set 사용 시 주의사항
+
+키에 객체 자체 {a:1}을 넣은 경우 각각은 서로 다른 참조가 되어 has 연산으로 false를 반환하지만, 객체를 담은 변수를 추가한 경우에는 해당 참조가 동일하여 true를 반환한다.
+
+```js
+const set = new Set();
+
+set.add({ a: 1 });
+set.has({ a: 1 }); // false
+
+const obj = { a: 1 };
+set.add(obj);
+set.has(obj); // true
+```
+
+#### Set 자료형을 선택해야하는 상황
+
+1. 중복 데이터를 허용하지 않아야 할 때
+2. 값의 존재 여부를 빈번히 확인해야 할 때
+3. 컬렉션의 정확한 크기를 자주 확인할 때
+4. 삽입 순서가 중요하면서 중복을 배제해야 할 때
+5. 집합 연산(합집합, 교집합 등)이 필요할 때
+
+Set은 이러한 요구사항이 있을 때 일반 배열보다 더 나은 성능과 코드 가독성을 제공한다.
+
+### WeakSet
+
+인스타그램 포스팅 후 좋아요 수를 늘리고 싶어서 자기꺼에 좋아요를 눌렀다고 해보자. Set을 그냥 썼다면 캐싱 저장이 될 것이다. 그런데 그 게시글을 삭제한다면, 좋아요 Set은 여전히 캐시에 남아있지만, 해당 포스트는 없어진 상태이다. 이런 상황에서 WeakSet을 사용하면 좋다.
+
+메모리 관리와 객체 전용 저장에 특화된 자료구조이다.
+
+1. 객체 전용 저장 : 오직 객체만 값으로 저장 가능 (원시값 불가)
+2. 약한 참조 (Weak Reference) : 객체에 대한 참조가 WeakSet에만 존재할 경우 가비지 컬렉션 대상이 된다.
+3. 반복 불가능 : 열거형 메서드 (keys(), values(), entries()) 제공하지 않음
+4. 크기 확인 불가 : size 프로퍼티 제공하지 않음
+5. 전체 내용 확인 불가 : 저장된 요소들에 직접 접근할 방법이 없음
+
+```js
+const weakSet = new WeakSet();
+
+// 객체 생성 및 추가
+const obj1 = { id: 1 };
+const obj2 = { id: 2 };
+weakSet.add(obj1);
+weakSet.add(obj2);
+
+// 존재 여부 확인
+console.log(weakSet.has(obj1)); // true
+
+// 객체 삭제
+weakSet.delete(obj1);
+
+// 존재하지 않는 객체 확인
+console.log(weakSet.has(obj1)); // false
+```
+
+```js
+// Vanilla JS에서 사용 패턴
+const trackedElements = new WeakSet();
+
+function trackElement(element) {
+  trackedElements.add(element);
+}
+
+function isTracked(element) {
+  return trackedElements.has(element);
+}
+
+// 사용 예
+const button = document.getElementById("myButton");
+trackElement(button);
+
+// 나중에 확인
+console.log(isTracked(button)); // true
+
+// 요소가 DOM에서 제거되면 자동으로 추적 해제 (가비지 컬렉션)
+
+console.log(isTracked(button)); // false
+```
+
+뭔가 button에 애니메이션 같은거 걸기 전에 isTracked(button)을 통해 추적 여부를 확인하고, 추적 여부가 true라면 애니메이션을 걸고, 추적 여부가 false라면 애니메이션을 걸지 않는 식으로 사용할 수 있다.
+
+##### WeakSet은 객체의 추가 속성을 방지한다. (불변성을 강제한다)
+
+```js
+const immutableObjects = new WeakSet();
+
+function makeImmutable(obj) {
+  immutableObjects.add(obj);
+  return new Proxy(obj, {
+    set(target, prop, value) {
+      // 해당 obj에 대하여 set 명령이 들어오면 실행
+      if (immutableObjects.has(target)) {
+        throw new Error("This object is immutable");
+      }
+      return Reflect.set(...arguments);
+    },
+  });
+}
+
+// 사용 예
+const user = { name: "Alice" };
+const protectedUser = makeImmutable(user);
+
+protectedUser.age = 30; // Error: This object is immutable
+```
+
+Proxy를 사용하여 Set을 Override한 후에 추가 속성에 대해 에러를 표기하도록 강제
+
+#### Proxy가 무엇인가요?
+
+메타 프로그래밍을 가능하게 하는 강력한 JS 기능
+
+객체의 set과 get을 override한다. 로깅, 조건에 따른 에러 설정, validation, 숫자로 들어왔을 때의 전처리, 허용되지 않는 prop의 수정 처리, 속성 접근 제어 등 다양한 기능을 제공한다.
+
+```js
+// 속성 접근 제어
+const handler = {
+  get(target, prop) {
+    if (prop === "age") {
+      return `${target[prop]}세`;
+    }
+    return target[prop] || "존재하지 않는 속성";
+  }
+  set(target, prop, value) {
+    if (prop === "age" && typeof value !== "number") {
+      throw new Error("나이는 숫자여야 합니다.");
+    }
+    target[prop] = value;
+    return true; // 성공적으로 설정되었음
+  }
+};
+
+const target = {name: "Alice", age: 20};
+const proxy = new Proxy(target, handler);
+
+console.log(proxy.name); // Alice
+console.log(proxy.age); // 20세
+console.log(proxy.hobby); // 존재하지 않는 속성
+
+proxy.age = 31; // 성공
+proxy.age = "31"; // Error: 나이는 숫자여야 합니다.
+```
+
+##### 예시 : Reflect + Private를 이용한 속성 보호
+
+Reflect는 일관된 response를 보내주기 위한 목적으로 사용된다. `taget[prop]` 대신 `Reflect.get(target, prop, receiver)`를 사용하면 일관된 response를 보낼 수 있다.
+
+속성 앞에 \_를 붙여서 Private로 만드는 convention이 있다.
+
+```js
+const secureHandler = {
+  get(target, prop, receiver) {
+    if (prop.startsWith("_")) {
+      throw new Error(`Private property ${prop} is not accessible`);
+    }
+    return Reflect.get(target, prop, receiver);
+  },
+  set(target, prop, value, receiver) {
+    if (prop.startsWith("_")) {
+      throw new Error(`Private property ${prop} is not modifiable`);
+    }
+    return Reflect.set(target, prop, value, receiver);
+  },
+};
+
+const user = {
+  _password: "1234",
+  username: "alice",
+};
+
+const secureUser = new Proxy(user, secureHandler);
+
+console.log(secureUser.username); // alice
+console.log(secureUser._password); // Error: Private property _password is not accessible
+secureUser.username = "bob"; // 성공
+secureUser._password = "5678"; // Error: Private property _password is not modifiable
+```
+
+클라이언트 사이드에서 서버로 전달하는 Payload 데이터 중 접근은 가능하지만, 사용자가 수정을 해서는 안되는 데이터에 대해 Override를 제한해야 하는 경우가 많습니다. 이러한 데이터는 Proxy를 사용해 Setter를 보호하여 값의 덮어쓰기를 제한하거나 또는 경우에 따라서는 권한을 늘려 Validation으로 사용하는 것도 유리하다.
